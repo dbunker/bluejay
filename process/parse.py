@@ -1,8 +1,11 @@
+# this file is to convert from spark output to input for javascript
+# data analysis and visualization
+
 import glob
 import json
 
 # if placing final data folder in this folder
-data_location = '2015-01'
+data_location = '2015'
 
 def clean_adj(adj_list):
 

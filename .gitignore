@@ -3,3 +3,5 @@ config.py
 *.pyc
 examples/test
 target
+venv
+*.pem

@@ -67,26 +67,22 @@ object Word2VecProcess {
         }
     }
 
-    def getOrgs(jsonData : RDD[String]) : RDD[(String, String, Int)] = {
+    def getOrg(jsonString : String) : (String, String, Int) = {
+        val parsed = parse(jsonString)
+        val orgName = extractString(parsed \ "noun")
+        val subreddit = extractString(parsed \ "subreddit")
+        val count = extractInt(parsed \ "numNoun")
 
-        jsonData.map { jsonString => {
-            val parsed = parse(jsonString)
-            val orgName = extractString(parsed \ "noun")
-            val subreddit = extractString(parsed \ "subreddit")
-            val count = extractInt(parsed \ "numNoun")
-            (subreddit, orgName, count)
-        }}
+        (subreddit, orgName, count)
     }
 
-    def getLemmas(jsonData : RDD[String]) : RDD[(String, Array[String])] = {
+    def getLemmas(jsonString : String) : (String, Array[String]) = {
+        val parsed = parse(jsonString)
+        val tokensVal = extractString(parsed \ "sentence").toLowerCase
+        val tokens = tokensVal.split(" ")
+        val subreddit = extractString(parsed \ "subreddit")
 
-        jsonData.map { jsonString => {
-            val parsed = parse(jsonString)
-            val tokensVal = extractString(parsed \ "sentence").toLowerCase
-            val tokens = tokensVal.split(" ")
-            val subreddit = extractString(parsed \ "subreddit")
-            (subreddit, tokens)
-        }}
+        (subreddit, tokens)
     }
 
     case class Text(text : Array[String])
@@ -217,8 +213,13 @@ object Word2VecProcess {
         val orgsJsonData = sc.textFile(inPath + "/orgs")
         val lemmasJsonData = sc.textFile(inPath + "/orgsSentences")
 
-        val orgsRdd : RDD[(String, String, Int)] = getOrgs(orgsJsonData)
-        val lemmasRdd : RDD[(String, Array[String])] = getLemmas(lemmasJsonData)
+        val orgsRdd : RDD[(String, String, Int)] = orgsJsonData.map { jsonString => {
+          getOrg(jsonString)
+        }}
+
+        val lemmasRdd : RDD[(String, Array[String])] = lemmasJsonData.map { jsonString => {
+          getLemmas(jsonString)
+        }}
 
         val subreddits = lemmasRdd.map { case (subreddit, lemmas) => (subreddit, 1) }
             .reduceByKey {(n1,n2) => (n1+n2)}

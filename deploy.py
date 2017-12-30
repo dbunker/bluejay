@@ -8,6 +8,8 @@ from config import Config
 import os.path
 import shutil
 
+EMR_RELEASE = 'emr-5.11.0'
+
 def get_emr_client():
 
     return boto3.client('emr',
@@ -24,14 +26,14 @@ def get_s3_client():
 
 #################
 
-def cluster_start(steps=[], keep_alive=True):
+def cluster_start(steps=[], keep_alive=True, terminate_on_failure=False):
 
     emr_client = get_emr_client()
 
     response = emr_client.run_job_flow(
         Name='spark-cluster',
         LogUri='s3://' + Config.S3_BUCKET + '/emr-log',
-        ReleaseLabel='emr-4.2.0',
+        ReleaseLabel=EMR_RELEASE,
         Instances={
             'MasterInstanceType': 'm3.xlarge',
             'SlaveInstanceType': 'm3.xlarge',
@@ -39,7 +41,7 @@ def cluster_start(steps=[], keep_alive=True):
             'Ec2KeyName': Config.EC2_KEY_NAME,
             'KeepJobFlowAliveWhenNoSteps': keep_alive
         },
-        Steps=[
+        Steps=([
             {
                 'Name': 'SetupDebugging',
                 'ActionOnFailure': 'TERMINATE_CLUSTER',
@@ -48,7 +50,7 @@ def cluster_start(steps=[], keep_alive=True):
                     'Args': ['state-pusher-script']
                 }
             }
-        ] + steps,
+        ] if terminate_on_failure else []) + steps,
         Applications=[
             {
                 'Name': 'Spark'
@@ -70,10 +72,10 @@ def cluster_start(steps=[], keep_alive=True):
         ServiceRole='DataPipelineDefaultRole'
     )
 
-    print 'cluster_start'
+    print('cluster_start')
     pretty_print(response)
 
-def steps_cluster(s3_bucket, s3_key, class_name, args, terminate_on_failure=True):
+def steps_cluster(s3_bucket, s3_key, class_name, args, terminate_on_failure=False):
     return [
         {
             'Name': 'SparkProgramCluster',
@@ -98,7 +100,7 @@ def steps_cluster(s3_bucket, s3_key, class_name, args, terminate_on_failure=True
         }
     ]
 
-def steps_client(s3_bucket, s3_key, class_name, args, terminate_on_failure=True):
+def steps_client(s3_bucket, s3_key, class_name, args, terminate_on_failure=False):
 
     jar_name = str(int(round(time.time() * 1000))) + '.jar'
 
@@ -146,13 +148,13 @@ def job_submit_cluster_full(s3_bucket, s3_key, class_name, args):
 
     steps = steps_cluster(s3_bucket, s3_key, class_name, args)
     cluster_start(steps=steps, keep_alive=False)
-    print 'job_submit_cluster_full'
+    print('job_submit_cluster_full')
 
 def job_submit_client_full(s3_bucket, s3_key, class_name, args):
 
     steps = steps_client(s3_bucket, s3_key, class_name, args)
     cluster_start(steps=steps, keep_alive=False)
-    print 'job_submit_client_full'
+    print('job_submit_client_full')
 
 def job_submit(steps):
 
@@ -163,7 +165,7 @@ def job_submit(steps):
         JobFlowId=job_id,
         Steps=steps
     )
-    print 'job_submit'
+    print('job_submit')
     pretty_print(response)
 
 def job_submit_cluster(s3_bucket, s3_key, class_name, args):
@@ -184,15 +186,15 @@ def cluster_check_job():
 
     clusters = response['Clusters']
     if len(clusters) == 0:
-        print 'No clusters'
+        print('No clusters')
         return None
 
     if len(clusters) > 1:
-        print 'More than one cluster'
+        print('More than one cluster')
         return None
 
     job_id = clusters[0]['Id']
-    print 'Job ID: ' + job_id
+    print('Job ID: ' + job_id)
 
     return job_id
 
@@ -221,7 +223,7 @@ def cluster_debug():
     pretty_print(response)
 
     if 'MasterPublicDnsName' not in response['Cluster']:
-        print 'Master does not exist'
+        print('Master does not exist')
         exit()
 
     master_dns = response['Cluster']['MasterPublicDnsName']
@@ -237,17 +239,17 @@ def cluster_debug():
     instances_dns = [ instance['PublicDnsName'] for instance in response['Instances'] ]
 
     # use with AWS EMR foxyproxy rules
-    print ''
-    print 'ssh -i ./' + Config.EC2_KEY_NAME + '.pem -ND 8157 hadoop@' + master_dns
-    print 'http://' + master_dns + '/ganglia/'
-    print 'http://' + master_dns + ':8088'
+    print('')
+    print('ssh -i ./' + Config.EC2_KEY_NAME + '.pem -ND 8157 hadoop@' + master_dns)
+    print('http://' + master_dns + '/ganglia/')
+    print('http://' + master_dns + ':8088')
     for instance_dns in instances_dns:
-        print 'http://' + instance_dns + ':8042'
+        print('http://' + instance_dns + ':8042')
 
 def delete_from_local(file_path):
 
     if os.path.exists(file_path):
-        input_val = raw_input('Delete local: ' + file_path + '? (y/n) ')
+        input_val = input('Delete local: ' + file_path + '? (y/n) ')
         if input_val == 'y':
             if os.path.isfile(file_path):
                 os.remove(file_path)
@@ -267,18 +269,18 @@ def delete_from_s3(s3_bucket, s3_key, check=True):
     if 'Contents' in response:
 
         if check:
-            input_val = raw_input('Delete remote: s3://' + s3_bucket + '/' + s3_key + '? (y/n) ')
+            input_val = input('Delete remote: s3://' + s3_bucket + '/' + s3_key + '? (y/n) ')
 
         if not check or input_val == 'y':
 
             while 'Contents' in response:
                 for content in response['Contents']:
                     key = content['Key']
-                    print 'Delete: ' + key
+                    print('Delete: ' + key)
                     response = s3_client.delete_object(
                         Bucket=s3_bucket,
                         Key=key)
-                print response
+                print(response)
 
                 response = s3_client.list_objects(
                 Bucket=s3_bucket,
@@ -300,7 +302,7 @@ def upload_to_s3(file, s3_bucket, s3_key, check=True):
         Body=data)
 
     pretty_print(response)
-    print 'Uploaded to ' + 's3://' + s3_bucket + '/' + s3_key
+    print('Uploaded to ' + 's3://' + s3_bucket + '/' + s3_key)
 
 def local_shell(jar_file):
 
@@ -335,9 +337,10 @@ def test(local_dir):
     run_command(cmd, 'Failed test')
 
 def run_command(cmd, failure_msg):
+    print(cmd)
     result = os.system(cmd)
     if result != 0:
-        print failure_msg
+        print(failure_msg)
         exit()
 
 def pretty_print(input_dict):
@@ -352,7 +355,9 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--project', required=True, help='The project to operate on')
+    parser.add_argument('--project', help='The project to operate on')
+    parser.add_argument('--path', help='Set initial path for testing')
+    parser.add_argument('--partitions', help='Set partitions')
 
     parser.add_argument('--build', action='store_true', help='Build scala project')
     parser.add_argument('--test', action='store_true', help='Test scala project')
@@ -374,7 +379,7 @@ def main():
     args = parser.parse_args()
 
     def in_arg(name):
-        return any((value and name in key) for (key, value) in vars(args).iteritems())
+        return any((value and name in key) for (key, value) in vars(args).items())
 
     is_job = in_arg('job')
     is_local = in_arg('local')
@@ -385,6 +390,12 @@ def main():
 
         input_path = 'data/comments/RC_2015-05'
         output_path = 'data/nlp'
+
+    elif args.project == 'simple_count':
+        class_name = 'SimpleCountProcess'
+
+        input_path = 'data/comments/RC_2015-05'
+        output_path = 'data/simple_count'
 
     elif args.project == 'word_count':
         class_name = 'WordCountProcess'
@@ -405,13 +416,13 @@ def main():
         output_path = 'data/word_to_vec'
 
     else:
-        print 'Invalid project: ' + args.project
+        print('Invalid project: ' + args.project)
         exit()
 
     proj_name = args.project
     local_dir = Config.LOCAL_DIR + '/' + proj_name
-    jar_file = proj_name + '-assembly-1.0.jar'
-    jar_path = local_dir + '/target/scala-2.10/' + jar_file
+    jar_file = proj_name + '-assembly-1.1.jar'
+    jar_path = local_dir + '/target/scala-2.11/' + jar_file
 
     s3_bucket = Config.S3_BUCKET
     program_s3_key = 'emr/program/' + jar_file
@@ -419,21 +430,31 @@ def main():
     if is_submit:
         if is_job:
             prefix = 's3n://' + s3_bucket
-            delete_from_s3(s3_bucket, output_path)
+            if args.path:
+                prefix = prefix + '/' + args.path
+            delete_from_s3(s3_bucket, (args.path + '/' if args.path else '') + output_path)
 
             input_key = prefix + '/' + input_path
             output_key = prefix + '/' + output_path
-            params = input_key + ' ' + output_key + ' prod'
+            number_partitions = '32'
+            if args.partitions:
+                number_partitions = args.partitions
+            params = input_key + ' ' + output_key + ' ' + number_partitions + ' prod'
 
         else:
             prefix = Config.LOCAL_DATA_DIR
+            if args.path:
+                prefix = prefix + '/' + args.path
             delete_from_local(prefix + '/' + output_path)
 
             input_key = prefix + '/' + input_path
             output_key = prefix + '/' + output_path
-            params = '"' + input_key + '" "' + output_key + '"' + ' local'
+            number_partitions = '1'
+            if args.partitions:
+                number_partitions = args.partitions
+            params = input_key + ' ' + output_key + ' ' + number_partitions + ' local'
 
-        print 'Params: ' + params
+        print('Params: ' + params)
 
     if args.build:
         build(local_dir)
