@@ -1,7 +1,11 @@
-.DS_Store
 config.py
-*.pyc
-examples/test
-target
+
 venv
-*.pem
+__pycache__
+*.pyc
+
+target
+*.iml
+.idea
+
+.DS_Store

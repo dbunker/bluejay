@@ -325,15 +325,15 @@ def local_submit(jar_file, class_name, args):
     '''
     run_command(cmd, 'Failed local submit')
 
-def build(local_dir):
+def build(proj_name):
 
     # creating jar files in lib: jar cvf data.jar data
-    cmd = 'cd ' + local_dir + ' && sbt -mem 4096 clean assembly'
+    cmd = 'sbt -mem 4096 "project ' + proj_name + '" clean assembly'
     run_command(cmd, 'Failed build')
 
-def test(local_dir):
+def test(proj_name):
 
-    cmd = 'cd ' + local_dir + ' && sbt -mem 4096 clean test'
+    cmd = 'sbt -mem 4096 "project ' + proj_name + '" clean test'
     run_command(cmd, 'Failed test')
 
 def run_command(cmd, failure_msg):
@@ -382,35 +382,34 @@ def main():
         return any((value and name in key) for (key, value) in vars(args).items())
 
     is_job = in_arg('job')
-    is_local = in_arg('local')
     is_submit = in_arg('submit')
 
     if args.project == 'nlp':
-        class_name = 'NLPProcess'
+        class_name = 'com.bluejay.nlp.NLPProcess'
 
         input_path = 'data/comments/RC_2015-05'
         output_path = 'data/nlp'
 
     elif args.project == 'simple_count':
-        class_name = 'SimpleCountProcess'
+        class_name = 'com.bluejay.simplecount.SimpleCountProcess'
 
         input_path = 'data/comments/RC_2015-05'
         output_path = 'data/simple_count'
 
     elif args.project == 'word_count':
-        class_name = 'WordCountProcess'
+        class_name = 'com.bluejay.wordcount.WordCountProcess'
 
         input_path = 'data/nlp'
         output_path = 'data/word_count'
 
     elif args.project == 'vec_example':
-        class_name = 'VecExampleProcess'
+        class_name = 'com.bluejay.vecexample.VecExampleProcess'
 
         input_path = 'data/test_vec'
         output_path = 'data/test_vec_out'
 
     elif args.project == 'word_to_vec':
-        class_name = 'Word2VecProcess'
+        class_name = 'com.bluejay.wordtovec.Word2VecProcess'
 
         input_path = 'data/word_count'
         output_path = 'data/word_to_vec'
@@ -420,9 +419,8 @@ def main():
         exit()
 
     proj_name = args.project
-    local_dir = Config.LOCAL_DIR + '/' + proj_name
-    jar_file = proj_name + '-assembly-1.1.jar'
-    jar_path = local_dir + '/target/scala-2.11/' + jar_file
+    jar_file = proj_name + '.jar'
+    jar_path = proj_name + '/target/scala-2.11/' + jar_file
 
     s3_bucket = Config.S3_BUCKET
     program_s3_key = 'emr/program/' + jar_file
@@ -457,10 +455,10 @@ def main():
         print('Params: ' + params)
 
     if args.build:
-        build(local_dir)
+        build(proj_name)
 
     if args.test:
-        test(local_dir)
+        test(proj_name)
 
     if args.cluster_start:
         cluster_start()
