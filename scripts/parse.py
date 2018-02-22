@@ -4,8 +4,8 @@
 import glob
 import json
 
-# if placing final data folder in this folder
-data_location = '2015'
+# place final data folder in this folder
+DATA_LOCATION = 'data'
 
 def clean_adj(adj_list):
 
@@ -23,19 +23,22 @@ def clean_adj(adj_list):
 
     return new_adj_list[0:10]
 
+
 def sort_by_count(obj):
     return -obj['data']['count']
 
+
 def word_count():
 
-    file_path = data_location + '/word_count/orgs/part-*'
+    file_path = f'{DATA_LOCATION}/word_count/orgs/part-*'
 
     file_paths = glob.glob(file_path)
     output_data = []
     id_num = 0
 
     for file_path in file_paths:
-        print file_path
+        print(file_path)
+
         with open(file_path, 'r') as data_file:
             for line in data_file:
                 json_data = json.loads(line)
@@ -131,20 +134,19 @@ def word_count():
         output_json = json.dumps(final_output)
         output_file.write(output_json)
 
-def pretty_print(input_dict):
-    return json.dumps(input_dict, sort_keys=True, indent=4, separators=(',', ': '))
 
 def word_to_vec():
 
-    file_path_orgs = data_location + '/word_to_vec/orgSynonyms/*/part-*'
-    file_path_all = data_location + '/word_to_vec/all/part-*'
+    file_path_orgs = f'{DATA_LOCATION}/word_to_vec/orgSynonyms/*/part-*'
+    file_path_all = f'{DATA_LOCATION}/word_to_vec/all/part-*'
     file_paths = glob.glob(file_path_orgs) + glob.glob(file_path_all)
 
     output_data = []
     id_num = 0
 
     for file_path in file_paths:
-        print file_path
+        print(file_path)
+
         with open(file_path, 'r') as data_file:
             for line in data_file:
                 json_data = json.loads(line)
@@ -223,6 +225,11 @@ def word_to_vec():
     with open('data-word-to-vec.json', 'w') as output_file:
         output_json = json.dumps(final_output)
         output_file.write(output_json)
+
+
+def pretty_print(input_dict):
+    return json.dumps(input_dict, sort_keys=True, indent=4, separators=(',', ': '))
+
 
 if __name__ == '__main__':
 

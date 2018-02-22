@@ -1,356 +1,17 @@
-import os
 import argparse
-import json
-import boto3
-import pprint
-import time
 from config import Config
-import os.path
-import shutil
-
-EMR_RELEASE = 'emr-5.11.0'
-
-def get_emr_client():
-
-    return boto3.client('emr',
-        aws_access_key_id=Config.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=Config.AWS_SECRET_ACCESS_KEY,
-        region_name=Config.REGION_NAME)
-
-def get_s3_client():
-
-    return boto3.client('s3',
-        aws_access_key_id=Config.AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=Config.AWS_SECRET_ACCESS_KEY,
-        region_name=Config.REGION_NAME)
-
-#################
-
-def cluster_start(steps=[], keep_alive=True, terminate_on_failure=False):
-
-    emr_client = get_emr_client()
-
-    response = emr_client.run_job_flow(
-        Name='spark-cluster',
-        LogUri='s3://' + Config.S3_BUCKET + '/emr-log',
-        ReleaseLabel=EMR_RELEASE,
-        Instances={
-            'MasterInstanceType': 'm3.xlarge',
-            'SlaveInstanceType': 'm3.xlarge',
-            'InstanceCount': 3,
-            'Ec2KeyName': Config.EC2_KEY_NAME,
-            'KeepJobFlowAliveWhenNoSteps': keep_alive
-        },
-        Steps=([
-            {
-                'Name': 'SetupDebugging',
-                'ActionOnFailure': 'TERMINATE_CLUSTER',
-                'HadoopJarStep': {
-                    'Jar': 'command-runner.jar',
-                    'Args': ['state-pusher-script']
-                }
-            }
-        ] if terminate_on_failure else []) + steps,
-        Applications=[
-            {
-                'Name': 'Spark'
-            },
-            {
-                'Name': 'Ganglia'
-            }
-        ],
-        BootstrapActions=[
-            {
-                'Name': 'Java8',
-                'ScriptBootstrapAction': {
-                    'Path': 's3://' + Config.S3_BUCKET + '/emr/emr_bootstrap_java_8.sh',
-                }
-            }
-        ],
-        VisibleToAllUsers=True,
-        JobFlowRole='DataPipelineDefaultResourceRole',
-        ServiceRole='DataPipelineDefaultRole'
-    )
-
-    print('cluster_start')
-    pretty_print(response)
-
-def steps_cluster(s3_bucket, s3_key, class_name, args, terminate_on_failure=False):
-    return [
-        {
-            'Name': 'SparkProgramCluster',
-            'ActionOnFailure': 'TERMINATE_CLUSTER' if terminate_on_failure else 'CONTINUE',
-            'HadoopJarStep': {
-                'Jar': 'command-runner.jar',
-                'Args': [
-                    'spark-submit',
-                    '--deploy-mode',
-                    'cluster',
-                    '--executor-memory',
-                    '8G',
-                    '--executor-cores',
-                    '4',
-                    '--num-executors',
-                    '3',
-                    '--class',
-                    class_name,
-                    's3://' + s3_bucket + '/' + s3_key
-                ] + args.strip().split()
-            }
-        }
-    ]
-
-def steps_client(s3_bucket, s3_key, class_name, args, terminate_on_failure=False):
-
-    jar_name = str(int(round(time.time() * 1000))) + '.jar'
-
-    return [
-        {
-            'Name': 'UploadProgram',
-            'ActionOnFailure': 'TERMINATE_CLUSTER' if terminate_on_failure else 'CONTINUE',
-            'HadoopJarStep': {
-                'Jar': 'command-runner.jar',
-                'Args': [
-                    'hdfs',
-                    'dfs',
-                    '-get',
-                    's3://' + s3_bucket + '/' + s3_key,
-                    '/mnt/' + jar_name
-                ]
-            }
-        },
-        {
-            'Name': 'SparkProgramClient',
-            'ActionOnFailure': 'TERMINATE_CLUSTER' if terminate_on_failure else 'CONTINUE',
-            'HadoopJarStep': {
-                'Jar': 'command-runner.jar',
-                'Args': [
-                    'spark-submit',
-                    '--deploy-mode',
-                    'client',
-                    '--driver-memory',
-                    '8G',
-                    '--executor-memory',
-                    '8G',
-                    '--executor-cores',
-                    '4',
-                    '--num-executors',
-                    '3',
-                    '--class',
-                    class_name,
-                    '/mnt/' + jar_name
-                ] + args.strip().split()
-            }
-        }
-    ]
-
-def job_submit_cluster_full(s3_bucket, s3_key, class_name, args):
-
-    steps = steps_cluster(s3_bucket, s3_key, class_name, args)
-    cluster_start(steps=steps, keep_alive=False)
-    print('job_submit_cluster_full')
-
-def job_submit_client_full(s3_bucket, s3_key, class_name, args):
-
-    steps = steps_client(s3_bucket, s3_key, class_name, args)
-    cluster_start(steps=steps, keep_alive=False)
-    print('job_submit_client_full')
-
-def job_submit(steps):
-
-    job_id = cluster_check_job()
-
-    emr_client = get_emr_client()
-    response = emr_client.add_job_flow_steps(
-        JobFlowId=job_id,
-        Steps=steps
-    )
-    print('job_submit')
-    pretty_print(response)
-
-def job_submit_cluster(s3_bucket, s3_key, class_name, args):
-    job_submit(steps_cluster(s3_bucket, s3_key, class_name, args))
-
-def job_submit_client(s3_bucket, s3_key, class_name, args):
-    job_submit(steps_client(s3_bucket, s3_key, class_name, args))
-
-#################
-
-def cluster_check_job():
-
-    emr_client = get_emr_client()
-    response = emr_client.list_clusters(ClusterStates=[
-        'STARTING', 'BOOTSTRAPPING', 'RUNNING', 'WAITING'
-    ])
-    pretty_print(response)
-
-    clusters = response['Clusters']
-    if len(clusters) == 0:
-        print('No clusters')
-        return None
-
-    if len(clusters) > 1:
-        print('More than one cluster')
-        return None
-
-    job_id = clusters[0]['Id']
-    print('Job ID: ' + job_id)
-
-    return job_id
-
-def cluster_terminate():
-
-    job_id = cluster_check_job()
-    if job_id == None:
-        return
-
-    emr_client = get_emr_client()
-    response = emr_client.terminate_job_flows(
-        JobFlowIds=[
-            job_id
-        ]
-    )
-    pretty_print(response)
-
-def cluster_debug():
-
-    job_id = cluster_check_job()
-
-    emr_client = get_emr_client()
-    response = emr_client.describe_cluster(
-        ClusterId=job_id
-    )
-    pretty_print(response)
-
-    if 'MasterPublicDnsName' not in response['Cluster']:
-        print('Master does not exist')
-        exit()
-
-    master_dns = response['Cluster']['MasterPublicDnsName']
-
-    response = emr_client.list_instances(
-        ClusterId=job_id,
-        InstanceGroupTypes=[
-            'CORE',
-        ]
-    )
-    pretty_print(response)
-
-    instances_dns = [ instance['PublicDnsName'] for instance in response['Instances'] ]
-
-    # use with AWS EMR foxyproxy rules
-    print('')
-    print('ssh -i ./' + Config.EC2_KEY_NAME + '.pem -ND 8157 hadoop@' + master_dns)
-    print('http://' + master_dns + '/ganglia/')
-    print('http://' + master_dns + ':8088')
-    for instance_dns in instances_dns:
-        print('http://' + instance_dns + ':8042')
-
-def delete_from_local(file_path):
-
-    if os.path.exists(file_path):
-        input_val = input('Delete local: ' + file_path + '? (y/n) ')
-        if input_val == 'y':
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-            else:
-                shutil.rmtree(file_path)
-        else:
-            exit()
-
-def delete_from_s3(s3_bucket, s3_key, check=True):
-
-    s3_client = get_s3_client()
-
-    response = s3_client.list_objects(
-        Bucket=s3_bucket,
-        Prefix=s3_key)
-
-    if 'Contents' in response:
-
-        if check:
-            input_val = input('Delete remote: s3://' + s3_bucket + '/' + s3_key + '? (y/n) ')
-
-        if not check or input_val == 'y':
-
-            while 'Contents' in response:
-                for content in response['Contents']:
-                    key = content['Key']
-                    print('Delete: ' + key)
-                    response = s3_client.delete_object(
-                        Bucket=s3_bucket,
-                        Key=key)
-                print(response)
-
-                response = s3_client.list_objects(
-                Bucket=s3_bucket,
-                Prefix=s3_key)
-        else:
-            exit()
-
-def upload_to_s3(file, s3_bucket, s3_key, check=True):
-
-    delete_from_s3(s3_bucket, s3_key, check)
-
-    s3_client = get_s3_client()
-
-    data = open(file, 'rb')
-
-    response = s3_client.put_object(
-        Bucket=s3_bucket,
-        Key=s3_key,
-        Body=data)
-
-    pretty_print(response)
-    print('Uploaded to ' + 's3://' + s3_bucket + '/' + s3_key)
-
-def local_shell(jar_file):
-
-    cmd = Config.SPARK_DIR + '''/bin/spark-shell \
-        --driver-memory 4096M \
-        --executor-memory 4096M \
-        --jars ''' + jar_file + '''
-    '''
-    run_command(cmd, 'Failed local shell')
-
-def local_submit(jar_file, class_name, args):
-
-    cmd = Config.SPARK_DIR + '''/bin/spark-submit \
-        --driver-memory 4096M \
-        --executor-memory 4096M \
-        --deploy-mode client \
-        --class "''' + class_name + '''" \
-        --master local[4] \
-        ''' + jar_file + ' ' + args + '''
-    '''
-    run_command(cmd, 'Failed local submit')
-
-def build(proj_name):
-
-    # creating jar files in lib: jar cvf data.jar data
-    cmd = 'sbt -mem 4096 "project ' + proj_name + '" clean assembly'
-    run_command(cmd, 'Failed build')
-
-def test(proj_name):
-
-    cmd = 'sbt -mem 4096 "project ' + proj_name + '" clean test'
-    run_command(cmd, 'Failed test')
-
-def run_command(cmd, failure_msg):
-    print(cmd)
-    result = os.system(cmd)
-    if result != 0:
-        print(failure_msg)
-        exit()
-
-def pretty_print(input_dict):
-    pprint.pprint(input_dict)
+import scripts.cluster as cluster
+import scripts.util as util
+
+util.Config = Config
+cluster.Config = Config
 
 #################
 
 # example pipelined commands to build, upload, and spin up EMR cluster with job,
 # terminating upon error or completion, will exit if previous command fails:
-# python deploy.py --project word_count --build --job_upload --job_submit_cluster_full
+# python deploy.py --project simple_count --build --job_upload --job_submit_cluster_full
+
 def main():
 
     parser = argparse.ArgumentParser()
@@ -415,83 +76,78 @@ def main():
         output_path = 'data/word_to_vec'
 
     else:
-        print('Invalid project: ' + args.project)
+        print(f'Invalid project: {args.project}')
         exit()
 
     proj_name = args.project
-    jar_file = proj_name + '.jar'
-    jar_path = proj_name + '/target/scala-2.11/' + jar_file
+    jar_file = f'{proj_name}.jar'
+    jar_path = f'{proj_name}/target/scala-2.11/{jar_file}'
 
     s3_bucket = Config.S3_BUCKET
-    program_s3_key = 'emr/program/' + jar_file
+    program_s3_key = f'emr/program/{jar_file}'
 
     if is_submit:
+
+        prefix = f's3n://{s3_bucket}' if is_job else Config.LOCAL_DATA_DIR
+        if args.path:
+            prefix = f'{prefix}/{args.path}'
+
         if is_job:
-            prefix = 's3n://' + s3_bucket
-            if args.path:
-                prefix = prefix + '/' + args.path
-            delete_from_s3(s3_bucket, (args.path + '/' if args.path else '') + output_path)
-
-            input_key = prefix + '/' + input_path
-            output_key = prefix + '/' + output_path
-            number_partitions = '32'
-            if args.partitions:
-                number_partitions = args.partitions
-            params = input_key + ' ' + output_key + ' ' + number_partitions + ' prod'
-
+            util.delete_from_s3(s3_bucket, f'{args.path}/{output_path}' if args.path else output_path)
         else:
-            prefix = Config.LOCAL_DATA_DIR
-            if args.path:
-                prefix = prefix + '/' + args.path
-            delete_from_local(prefix + '/' + output_path)
+            util.delete_from_local(f'{prefix}/{output_path}')
 
-            input_key = prefix + '/' + input_path
-            output_key = prefix + '/' + output_path
-            number_partitions = '1'
-            if args.partitions:
-                number_partitions = args.partitions
-            params = input_key + ' ' + output_key + ' ' + number_partitions + ' local'
+        input_key = f'{prefix}/{input_path}'
+        output_key = f'{prefix}/{output_path}'
+        number_partitions = '32' if is_job else '1'
 
-        print('Params: ' + params)
+        if args.partitions:
+            number_partitions = args.partitions
+
+        env = 'prod' if is_job else 'local'
+        params = f'{input_key} {output_key} {number_partitions} {env}'
+
+        print(f'Params: {params}')
 
     if args.build:
-        build(proj_name)
+        util.build(proj_name)
 
     if args.test:
-        test(proj_name)
+        util.test(proj_name)
 
     if args.cluster_start:
-        cluster_start()
+        cluster.cluster_start()
 
     if args.cluster_check:
-        cluster_check_job()
+        cluster.cluster_check_job()
 
     if args.cluster_terminate:
-        cluster_terminate()
+        cluster.cluster_terminate()
 
     if args.cluster_debug:
-        cluster_debug()
+        cluster.cluster_debug()
 
     if args.job_upload:
-        upload_to_s3(jar_path, s3_bucket, program_s3_key, False)
+        util.upload_to_s3(jar_path, s3_bucket, program_s3_key, False)
 
     if args.job_submit_cluster:
-        job_submit_cluster(s3_bucket, program_s3_key, class_name, params)
+        cluster.job_submit_cluster(s3_bucket, program_s3_key, class_name, params)
 
     if args.job_submit_client:
-        job_submit_client(s3_bucket, program_s3_key, class_name, params)
+        cluster.job_submit_client(s3_bucket, program_s3_key, class_name, params)
 
     if args.job_submit_cluster_full:
-        job_submit_cluster_full(s3_bucket, program_s3_key, class_name, params)
+        cluster.job_submit_cluster_full(s3_bucket, program_s3_key, class_name, params)
 
     if args.job_submit_client_full:
-        job_submit_client_full(s3_bucket, program_s3_key, class_name, params)
+        cluster.job_submit_client_full(s3_bucket, program_s3_key, class_name, params)
 
     if args.local_shell:
-        local_shell(jar_path)
+        util.local_shell(jar_path)
 
     if args.local_submit:
-        local_submit(jar_path, class_name, params)
+        util.local_submit(jar_path, class_name, params)
+
 
 if __name__ == '__main__':
     main()
